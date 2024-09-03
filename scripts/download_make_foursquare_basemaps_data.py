@@ -4,7 +4,7 @@ from configparser import ConfigParser
 import datetime
 import logging
 from pathlib import Path
-import pkgutil
+import importlib.util
 import shutil
 import subprocess
 from typing import Optional, Union
@@ -12,7 +12,7 @@ from zipfile import ZipFile
 
 import arcpy
 
-if pkgutil.get_loader("arcpy_parquet") is None:
+if importlib.util.find_spec("arcpy_parquet") is None:
     raise EnvironmentError(
         "The arcpy_parquet package is required. It was not found in the current environment."
     )
@@ -83,9 +83,9 @@ if __name__ == "__main__":
     config_pth = Path(__file__).parent / "foursquare_conversion_config.ini"
     config.read(config_pth)
 
-    input_dir = get_path_from_config("input_directory", "GEOENRICHMENT")
+    input_dir = get_path_from_config("input_directory", "BASEMAPS")
     input_pqt = input_dir / 'parquet'
-    output_fc = get_path_from_config("output_feature_class", "GEOENRICHMENT")
+    output_fc = get_path_from_config("output_feature_class", "BASEMAPS")
 
     output_fgdb = output_fc.parent
     output_dir = output_fgdb.parent
@@ -116,7 +116,7 @@ if __name__ == "__main__":
     raw_pth = Path(__file__).parent.parent / 'data' / 'raw' / 'foursquare_basemaps'
     if raw_pth.exists():
         logger.debug(f'Existing data download directory detected and starting to remove - {raw_pth}')
-        raw_pth.unlink()
+        shutil.rmtree(raw_pth)
         logger.debug('Removed data download directory.')
 
     logging.debug('Starting to download data from S3.')
@@ -144,12 +144,14 @@ if __name__ == "__main__":
     # get the path to the schema csv and ensure it exists
     schema_csv = get_schema_csv(input_dir / 'schema')
 
-    # convert to feature class
+   # convert to feature class
     parquet_to_feature_class(
         parquet_path=input_pqt,
         output_feature_class=output_fc,
         schema_file=schema_csv,
-        spatial_reference=3857,
+        geometry_type='COORDINATES',
+        geometry_column=['longitude', 'latitude'],
+        spatial_reference=4326,
         build_spatial_index=True,
     )
 

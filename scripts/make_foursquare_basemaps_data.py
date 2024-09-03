@@ -127,13 +127,15 @@ if __name__ == "__main__":
     # run the conversion
     logging.info('Starting parquet data import.')
 
-    # convert to feature class
+       # convert to feature class
     parquet_to_feature_class(
         parquet_path=input_pqt,
         output_feature_class=output_fc,
         schema_file=schema_csv,
-        spatial_reference=3857,
-        build_spatial_index=True
+        geometry_type='COORDINATES',
+        geometry_column=['longitude', 'latitude'],
+        spatial_reference=4326,
+        build_spatial_index=True,
     )
 
     # location to save the archive
