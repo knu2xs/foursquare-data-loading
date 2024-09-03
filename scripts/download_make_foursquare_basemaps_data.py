@@ -12,12 +12,14 @@ from zipfile import ZipFile
 
 import arcpy
 
-if importlib.util.find_spec("arcpy_parquet") is None:
-    raise EnvironmentError(
-        "The arcpy_parquet package is required. It was not found in the current environment."
-    )
+for lib in ['arcpy_parquet', 'foursquare_data_loading']:
+    if importlib.util.find_spec(lib) is None:
+        raise EnvironmentError(
+            f"The {lib} package is required. It was not found in the current environment."
+        )
 
 from arcpy_parquet import parquet_to_feature_class
+from foursquare_data_loading import get_schema_csv
 
 
 def get_path_from_config(key: str, section: Optional[str] = 'DEFAULT') -> Path:
@@ -45,35 +47,6 @@ def get_path_from_config(key: str, section: Optional[str] = 'DEFAULT') -> Path:
             break
 
     return pth
-
-
-def get_schema_csv(schema_dir: Union[Path, str]) -> Path:
-    """Helper function to retrieve the csv for the schema when saved as a single part file from Spark."""
-    # ensure we are working with a Path object
-    if isinstance(schema_dir, str):
-        schema_dir = Path(schema_dir)
-
-    # if working in a directory
-    if schema_dir.is_dir():
-
-        # get part csv file
-        prt_lst = [fl for fl in schema_dir.glob('part-*.csv')]
-
-        # ensure there even is a part file to work with
-        if len(prt_lst) == 0:
-            raise ValueError('Cannot locate a part*.csv file in the directory tree.')
-        else:
-            schema_csv = prt_lst[0]
-
-    # if just the file was passed
-    elif schema_dir.suffix == '.csv':
-        schema_csv = schema_dir
-
-    # pitch a fit if cannot figure out what to  do
-    else:
-        raise ValueError('Cannot locate a schema *.csv file.')
-    
-    return schema_csv
 
 
 if __name__ == "__main__":

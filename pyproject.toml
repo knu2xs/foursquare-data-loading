@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61.0", "setuptools-scm>=8.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "foursquare-data-loading"
+version = "0.0.0"
+authors = [
+  { name="Joel McCune (https://github.com/knu2xs)"},
+]
+description = "Download Foursquare Parquet datasets from AWS and convert to Feature Classes in File Geodatabases."
+readme = "README.md"
+requires-python = ">=3.6, <=3.12"
+classifiers = [
+    "Programming Language :: Python :: 3",
+]
+license = {file = "LICENSE"}
+dependencies = [
+    "arcgis>=2.2.0",
+    "arcpy-parquet@git+https://github.com/knu2xs/arcpy-parquet",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["foursquare_data_loading"]
