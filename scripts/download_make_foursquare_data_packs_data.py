@@ -19,6 +19,12 @@ if importlib.util.find_spec("arcpy_parquet") is None:
 
 from arcpy_parquet import parquet_to_feature_class
 
+if importlib.util.find_spec("py_message") is not None:
+    from py_message import send_pushover
+    has_py_message = True
+else:
+    has_py_message = False
+
 
 def get_path_from_config(key: str, section: Optional[str] = 'DEFAULT') -> Path:
     """
@@ -83,13 +89,29 @@ if __name__ == "__main__":
     config_pth = Path(__file__).parent / "foursquare_conversion_config.ini"
     config.read(config_pth)
 
-    input_dir = get_path_from_config("input_directory", "DATA_PACKS")
-    input_pqt = input_dir / 'parquet'
-    output_dir = get_path_from_config("output_directory", "DATA_PACKS")
+    delivery_year = config.get('DEFAULT', 'delivery_year')
+    delivery_month = config.get('DEFAULT', 'delivery_month')
+    s3_pth = config.get('DATA_PACKS', 's3_source')
+    pqt_pth = config.get("DATA_PACKS", "input_directory")
+    output_dir = config.get("DATA_PACKS", "output_directory")
+
+    # create path to where achives will be stored
+    zip_dir = output_dir.parent / f'{output_dir.stem}_archive'
+
+    # create parquet path to specific month - ensures delivery_* columns are not included in built data
+    pqt_date_pth = pqt_pth / f'delivery_year={delivery_year}' / f'delivery_month={delivery_month}'
+
+    if not pqt_date_pth.exists():
+        raise FileNotFoundError(f"""The dataset for the specified year and month does not appear to exist, "{pqt_date_pth}\"""")
+    else:
+        logging.info(f"""Using parquet dataset located at "{pqt_date_pth}\"""")
+
+    # create path to output data directory
+    out_dir = output_dir / f'delivery_year={delivery_year}' / f'delivery_month={delivery_month}'
 
     # ensure the output targets exist for the output
-    if not output_dir.exists():
-        output_dir.mkdir(parents=True)
+    if not out_dir.exists():
+        out_dir.mkdir(parents=True)
 
     # set up logging
     logger = logging.getLogger()
@@ -100,7 +122,7 @@ if __name__ == "__main__":
 
     # configure and add the logging file handler
     timestamp_str = datetime.datetime.today().strftime('%Y%m%d')
-    fh = logging.FileHandler(str(output_dir / f"foursquare_geoenrichment_{timestamp_str}.log"))
+    fh = logging.FileHandler(str(output_dir / f"foursquare_data_packs_{timestamp_str}.log"))
     fh.setFormatter(log_fmt)
     logger.addHandler(fh)
 
@@ -117,56 +139,80 @@ if __name__ == "__main__":
         logger.debug('Removed data download directory.')
 
     logging.debug('Starting to download data from S3.')
-    cmd_str = f'aws s3 cp s3://esri-data-main/processed/delivery/foursquare_data_pack_open_source/ {str(raw_pth)} --recursive'
+    cmd_str = f'aws s3 cp {str(s3_pth)}/ {str(raw_pth)} --recursive'
     subprocess.run(cmd_str)
     logging.info('Data downloaded from S3.')
 
-    # iterate the partitioned data directories
-    
-
-    # flush the geodatabase to avoid any corruption issues
-    if arcpy.Exists(str(output_fgdb)):
-        logging.debug(f'Removing previous file geodatabase - {output_fgdb}')
-        arcpy.management.Delete(str(output_fgdb))
-        logging.debug('Finished removing existing File Geodatabase.')
-
-    # create the output file geodatabase
-    logger.debug(f'Starting creation of File Geodatabase - {output_fgdb}')
-    arcpy.management.CreateFileGDB(str(output_fgdb.parent), str(output_fgdb.stem))
-    logger.info(f'File Geodatabase created - {output_fgdb}')
-
-    # ensure the input parquet dataset exists
-    if not input_pqt.exists():
-        raise ValueError(f'Cannot locate the input parquet dataset {input_pqt}')
-
-    # run the conversion
-    logger.info('Starting parquet data import.')
-
     # get the path to the schema csv and ensure it exists
-    schema_csv = get_schema_csv(input_dir / 'schema')
+    schema_csv = get_schema_csv(pqt_pth.parent / 'schema')
 
-    # convert to feature class
-    parquet_to_feature_class(
-        parquet_path=input_pqt,
-        output_feature_class=output_fc,
-        schema_file=schema_csv,
-        geometry_type='COORDINATES',
-        geometry_column=['longitude', 'latitude'],
-        spatial_reference=4326,
-        build_spatial_index=True,
-    )
+    # get unique country paths
+    pth_set = set(pth.parent for pth in pqt_pth.rglob('*.parquet'))
 
-    # location to save the archive
-    zip_pth = output_dir / f'{output_fgdb.stem}.zip'
+    # iterate the unique countries
+    for pth in pth_set:
 
-    logger.info(f'Starting to create an archive at {str(zip_pth)}')
+        # get the part of the path defining the country
+        cntry_prt = [prt for prt in pth.parts if prt.startswith('country')][0]
+        
+        # location to save the exported country data
+        cntry_dir = out_dir / cntry_prt
+        
+        # make sure the directory exists
+        if not cntry_dir.exists():
+            cntry_dir.mkdir(parents=True)
+        
+        # create path to feature class
+        fc_pth = cntry_dir / 'foursquare.gdb' / 'places'
+        
+        # create the file geodatabase to hydrate
+        if arcpy.Exists(str(fc_pth.parent)):
+            arcpy.management.Delete(str(fc_pth.parent))
+            
+        with arcpy.EnvManager(overwriteOutput=True):
+            _ = arcpy.management.CreateFileGDB(str(cntry_dir), 'foursquare.gdb')
+        
+        # convert the data to a feature class
+        parquet_to_feature_class(
+            parquet_path=pqt_date_pth, 
+            output_feature_class=fc_pth, 
+            schema_file=schema_csv, 
+            parquet_partitions=[cntry_prt], 
+            geometry_type='COORDINATES',
+            geometry_column=('longitude', 'latitude'),
+            build_spatial_index=True, compact=True
+        )
+        
+        logging.info(f'Successfully created {fc_pth}')
 
-    # build the archive
-    with ZipFile(zip_pth, mode='w', compresslevel=9) as zipper:
+        # get the path to the file geodatabase from the feautre class path
+        fgdb_pth = fc_pth.parent
 
-        # iterate the files comprising the file geodatabase and add to the archive
-        for gdb_file in output_dir.glob('**/*.gdb/**/*'):
-            target_pth = str(gdb_file.relative_to(output_dir))
-            zipper.write(gdb_file, target_pth)
+        # create a path to save the zipped archive
+        zip_pth = zip_dir / f'{fgdb_pth.parent.stem}.zip'
 
-    logger.info(f'Successfully created archive.')
+        # ensure the location to save the archive exists
+        if not zip_pth.parent.exists():
+            zip_pth.parent.mkdir(parents=True)
+        
+        logging.info(f'Starting to create an archive at {str(zip_pth)}')
+
+        # build the archive
+        with ZipFile(zip_pth, mode='w', compresslevel=9) as zipper:
+        
+            # iterate the files in the file geodatabase
+            for gdb_file in fgdb_pth.rglob('*'):
+
+                # ignore lock files...they create problems
+                if not gdb_file.suffix == '.lock':
+        
+                    # create a path in the archive with the file geodatabase
+                    target_pth = gdb_file.relative_to(fgdb_pth.parent)
+            
+                    # add the file to the archive
+                    zipper.write(gdb_file, target_pth)
+        
+        logging.info(f'Successfully created archive.')
+
+    if has_py_message:
+        send_pushover('Finished building Foursquare data packs.')
