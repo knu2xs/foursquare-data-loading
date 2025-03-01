@@ -18,6 +18,7 @@ license = {file = "LICENSE"}
 dependencies = [
     "arcgis>=2.2.0",
     "arcpy-parquet@git+https://github.com/knu2xs/arcpy-parquet",
+    "py-message@git+https://github.com/knu2xs/py-messag"
 ]
 
 [tool.setuptools.packages.find]
